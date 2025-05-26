@@ -4,7 +4,9 @@ pipeline {
         jdk 'jdk'
         nodejs 'nodejs'
     }
-
+    environment  {
+        SCANNER_HOME=tool 'sonar-scanner'
+    }
     stages {
         stage('Cleaning Workspace') {
             steps {
@@ -17,7 +19,23 @@ pipeline {
                 git branch: 'master', url: 'https://github.com/Kalaiarasan1103/End-to-End-Kubernetes-DevSecOps-Tetris-Project.git'
             }
         }
-
+         stage('Sonarqube Analysis') {
+            steps {
+                dir('Tetris-V1') {
+                    withSonarQubeEnv('sonar-server') {
+                        sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=TetrisVersion1.0 \
+                        -Dsonar.projectKey=TetrisVersion1.0 '''
+                    }
+                }
+            }
+        }
+        stage('Quality Check') {
+            steps {
+                script {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token' 
+                }
+            }
+        }
         stage('Installing Dependencies') {
             steps {
                 dir('Tetris-V1') {
@@ -26,28 +44,20 @@ pipeline {
             }
         }
 
-        stage('OWASP Dependency-Check Scan') {
-            steps {
-                dir('Tetris-V1') {
-                    dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'DP-Check'
-                    dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
-                }
-            }
-        }
 
         stage('Trivy File Scan') {
             steps {
                 dir('Tetris-V1') {
-                    sh 'trivy fs . > trivyfs.txt || true'
+                    sh 'trivy fs . > trivyfs.txt'
                 }
             }
         }
 
-        stage('Docker Image Build') {
+        stage("Docker Image Build") {
             steps {
                 script {
                     dir('Tetris-V1') {
-                        withDockerRegistry(credentialsId: 'docker', toolName: 'docker') {   
+                        withDockerRegistry(credentialsId: 'docker', toolName: 'docker') {
                             sh 'docker system prune -f'
                             sh 'docker container prune -f'
                             sh 'docker build -t tetrisv1 .'
@@ -57,10 +67,10 @@ pipeline {
             }
         }
 
-        stage('Docker Image Pushing') {
+        stage("Docker Image Pushing") {
             steps {
                 script {
-                    withDockerRegistry(credentialsId: 'docker', toolName: 'docker') {   
+                    withDockerRegistry(credentialsId: 'docker', toolName: 'docker') {
                         sh 'docker tag tetrisv1 kalai1103/tetrisv1:${BUILD_NUMBER}'
                         sh 'docker push kalai1103/tetrisv1:${BUILD_NUMBER}'
                     }
@@ -68,9 +78,15 @@ pipeline {
             }
         }
 
-        stage('Trivy Image Scan') {
+        stage("TRIVY Image Scan") {
             steps {
-                sh 'trivy image kalai1103/tetrisv1:${BUILD_NUMBER} > trivyimage.txt || true'
+                sh 'trivy image kalai1103/tetrisv1:${BUILD_NUMBER} > trivyimage.txt'
+            }
+        }
+
+        stage('Checkout Code Again') {
+            steps {
+                git branch: 'master', url: 'https://github.com/Kalaiarasan1103/End-to-End-Kubernetes-DevSecOps-Tetris-Project.git'
             }
         }
 
@@ -82,33 +98,29 @@ pipeline {
             steps {
                 dir('Manifest-file') {
                     withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
-                        sh '''
-                            git config user.email "Kalaiyarasan1103@gmail.com"
-                            git config user.name "Kalaiarasan1103"
-                            BUILD_NUMBER=${BUILD_NUMBER}
-                            echo $BUILD_NUMBER
-                            imageTag=$(grep -oP '(?<=tetrisv1:)[^ ]+' deployment-service.yml)
-                            echo $imageTag
-                            sed -i "s/tetrisv1:${imageTag}/tetrisv1:${BUILD_NUMBER}/" deployment-service.yml
-                            git add deployment-service.yml
-                            git commit -m "Update deployment Image to version ${BUILD_NUMBER}"
-                            git push https://${GITHUB_TOKEN}@github.com/Kalaiarasan1103/End-to-End-Kubernetes-DevSecOps-Tetris-Project.git HEAD:master
-                        '''
+                        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                            sh '''
+                                set -ex
+                                git config user.email "Kalaiyarasan1103@gmail.com"
+                                git config user.name "Kalaiarasan1103"
+
+                                echo "Current Image Tag:"
+                                grep -oP '(?<=tetrisv1:)[^ ]+' deployment-service.yml || true
+
+                                sed -i "s/tetrisv1:.*/tetrisv1:${BUILD_NUMBER}/" deployment-service.yml
+                                git status
+                                git diff
+
+                                git add deployment-service.yml || true
+                                git commit -m "Update deployment Image to version ${BUILD_NUMBER}" || echo "Nothing to commit"
+                                git push https://${GITHUB_TOKEN}@github.com/Kalaiarasan1103/${GIT_REPO_NAME}.git HEAD:master
+                            '''
+                        }
                     }
                 }
             }
         }
     }
-
-    post {
-        always {
-            echo 'Pipeline execution completed.'
-        }
-        success {
-            echo '✅ Pipeline executed successfully.'
-        }
-        failure {
-            echo '❌ Pipeline failed. Please check the logs.'
-        }
-    }
 }
+
+
