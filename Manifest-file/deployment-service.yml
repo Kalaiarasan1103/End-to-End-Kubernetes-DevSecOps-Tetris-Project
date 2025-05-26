@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: tetris
-        image: kalai1103/tetrisv2:12
+        image: kalai1103/tetrisv2:1
         ports:
         - containerPort: 3000
 ---
